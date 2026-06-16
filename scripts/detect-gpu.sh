@@ -30,6 +30,11 @@ is_discrete_gpu() {
     esac
 }
 
+join_slots() {
+    local IFS=,
+    echo "$*"
+}
+
 related_audio_slots() {
     local gpu_slot="$1"
     local group gpu_domain gpu_bus gpu_dev gpu_func
@@ -79,14 +84,14 @@ while IFS= read -r line; do
         [ -n "$audio" ] && slots+=("$audio")
     done < <(related_audio_slots "$slot")
 
-    candidates+=("${slots[*]// /,}")
+    joined=$(join_slots "${slots[@]}")
+    candidates+=("$joined")
     if [ "$pick" = "1" ]; then
-        echo "${slots[*]// /,}"
+        echo "$joined"
         exit 0
     fi
 
     driver=$(lspci -k -s "$slot" 2>/dev/null | awk '/Kernel driver in use/ {print $5; exit}')
-    joined=$(IFS=,; echo "${slots[*]}")
     printf '%s\n    %s\n' "$joined" "$name"
     printf '    IOMMU group: %s  driver: %s\n' "${group:-unknown}" "${driver:-none}"
 done < <(lspci -nn | grep -E 'VGA compatible controller|3D controller')

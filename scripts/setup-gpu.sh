@@ -94,10 +94,14 @@ enable_passthrough() {
         exit 1
     fi
 
+    # Accept comma- or space-separated slots; normalize to comma-separated.
+    slots=$(echo "$slots" | tr -s '[:space:]' ',' | sed 's/,,*/,/g; s/^,//; s/,$//')
+
     local slot
     local IFS=','
     for slot in $slots; do
         slot="${slot//[[:space:]]/}"
+        [ -n "$slot" ] || continue
         if [ ! -e "/sys/bus/pci/devices/0000:${slot}" ]; then
             echo "ERROR: PCI device not found: $slot"
             exit 1
