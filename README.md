@@ -76,16 +76,34 @@ Complete the Windows setup wizard in the viewer. Use **SATA** disk — the VM XM
 
 ## GPU passthrough (VFIO)
 
-Pass a physical NVIDIA or AMD GPU through to the Windows VM for native graphics performance (gaming, CUDA, DirectX, etc.).
+Pass a physical NVIDIA or AMD GPU through to the Windows VM for native graphics performance (gaming, CUDA, DirectX, etc.). The discrete GPU is **reserved for the VM** via `vfio-pci` — the Linux host will not use it for its desktop while passthrough is configured.
 
 ### Requirements
 
 - **IOMMU** enabled in BIOS (Intel VT-d or AMD-Vi)
 - Kernel cmdline: `intel_iommu=on` or `amd_iommu=on` (and often `iommu=pt`)
 - A **discrete GPU** bound to `vfio-pci` (not in use by the host desktop)
-- Dual-GPU setups work best: Intel iGPU for the Linux host, discrete GPU for the VM
+- **Dual-GPU** strongly recommended: Intel/AMD iGPU for the Linux host, discrete GPU for the VM
 
-### Quick setup
+Verify IOMMU on the host:
+
+```bash
+cat /proc/cmdline | grep -E 'intel_iommu|amd_iommu'
+ls /sys/kernel/iommu_groups/ | wc -l   # should be > 0
+./scripts/detect-gpu.sh
+```
+
+### Overview: what owns the GPU
+
+| State | GPU owner |
+|-------|-----------|
+| VM **running** | Windows (via VFIO) |
+| VM **stopped** | Idle on `vfio-pci` — host still cannot use it |
+| Passthrough **disabled** + vfio config removed | Host NVIDIA/AMD driver |
+
+Passthrough means the host gives up the discrete GPU entirely. That is expected.
+
+### Step 1 — Enable passthrough in VM config
 
 ```bash
 # List candidate GPUs and IOMMU groups
@@ -96,29 +114,142 @@ Pass a physical NVIDIA or AMD GPU through to the Windows VM for native graphics 
 
 # Or specify PCI slots manually (from detect-gpu.sh output)
 ./scripts/setup-gpu.sh --enable 01:00.0,01:00.1
+```
 
-# Re-apply the libvirt domain with GPU devices
+This writes `scripts/gpu.conf` (gitignored, machine-specific). See `scripts/gpu.conf.example`.
+
+### Step 2 — Switch the host to integrated graphics
+
+The host must stop using the discrete GPU **before** VFIO can bind it. On **Pop!_OS** / System76:
+
+```bash
+system76-power graphics          # check current mode (often "nvidia")
+sudo system76-power graphics integrated
+sudo reboot
+```
+
+After reboot:
+
+```bash
+system76-power graphics          # should print: integrated
+```
+
+**Display note:** External monitors plugged into the NVIDIA HDMI/DP ports will go dark on the host. Use the **laptop internal screen** (Intel iGPU) until the VM is running with the monitor on the passed-through GPU.
+
+On Ubuntu with `nvidia-prime`:
+
+```bash
+sudo prime-select intel
+sudo reboot
+```
+
+### Step 3 — Bind the GPU to vfio-pci at boot
+
+Get PCI IDs from `lspci -nn` (example for NVIDIA GPU + HDMI audio):
+
+```bash
+lspci -nn | grep -E 'VGA|Audio' | grep -i nvidia
+# 01:00.0 VGA ... [10de:28e0]
+# 01:00.1 Audio ... [10de:22be]
+```
+
+Create a modprobe config (replace IDs with yours):
+
+```bash
+sudo tee /etc/modprobe.d/vfio-pci.conf <<'EOF'
+# Reserve discrete GPU + HDMI audio for Windows VM passthrough
+options vfio-pci ids=10de:28e0,10de:22be
+softdep nvidia pre: vfio-pci
+softdep nvidia_drm pre: vfio-pci
+softdep nvidia_modeset pre: vfio-pci
+softdep nouveau pre: vfio-pci
+softdep snd_hda_intel pre: vfio-pci
+EOF
+
+sudo update-initramfs -u
+sudo reboot
+```
+
+### Step 4 — Verify VFIO binding
+
+```bash
+lspci -k -s 01:00.0
+lspci -k -s 01:00.1
+```
+
+Both should show:
+
+```
+Kernel driver in use: vfio-pci
+```
+
+They should **not** show `nvidia`, `nouveau`, or `snd_hda_intel`.
+
+### Step 5 — Apply VM definition and start
+
+```bash
 ./scripts/stop-vm.sh
 ./scripts/setup-vm.sh
 ./scripts/start-vm.sh
 ```
 
-Connect your monitor to the **passed-through GPU** — not SPICE. QXL remains available as a secondary display for remote viewing.
+- **Primary display:** physical monitor on the passed-through GPU (HDMI/DP on the discrete card)
+- **Secondary / remote:** `virt-viewer win10-vm` (QXL over SPICE) if you want a window on Linux
 
-### Disable passthrough
+### Windows guest
+
+After Windows is installed, install the GPU vendor driver (NVIDIA GeForce / Studio, or AMD Adrenalin). The VM XML includes NVIDIA-friendly settings (`kvm hidden`, OVMF MMIO quirk).
+
+### Disable passthrough / return GPU to host
 
 ```bash
+# 1) Remove VFIO binding
+sudo rm /etc/modprobe.d/vfio-pci.conf
+sudo update-initramfs -u
+
+# 2) Switch host back to discrete graphics (Pop!_OS)
+sudo system76-power graphics nvidia
+sudo reboot
+
+# 3) Disable passthrough in VM config
 ./scripts/setup-gpu.sh --disable
 ./scripts/stop-vm.sh && ./scripts/setup-vm.sh
 ```
 
-### Windows guest
+### GPU passthrough troubleshooting
 
-After Windows is installed, install the GPU vendor driver (NVIDIA GeForce Experience / AMD Adrenalin) inside the VM. The VM XML already includes NVIDIA-friendly settings (`kvm hidden`, OVMF MMIO quirk).
+#### `setup-vm.sh` — `unexpected feature 'iommu'`
 
-### Configuration file
+Libvirt **8.x** (Ubuntu 22.04 / Pop!_OS 22.04) does not support the guest `<iommu>` XML feature (added in libvirt 9.4+). This repo skips that element automatically on older libvirt. Host IOMMU (BIOS + kernel cmdline) is what VFIO actually needs.
 
-`scripts/setup-gpu.sh` writes `scripts/gpu.conf` (gitignored, machine-specific). See `scripts/gpu.conf.example` for the format.
+#### `virsh start` hangs or never returns
+
+Usually the host still owns the GPU. Check:
+
+1. `system76-power graphics` is `integrated` (not `nvidia`)
+2. `lspci -k -s 01:00.0` shows `vfio-pci`, not `nvidia`
+3. Restart libvirtd if a previous start attempt hung: `sudo systemctl restart libvirtd`
+
+#### virt-manager stuck on "Connecting to graphical console…"
+
+The VM may be running fine — SPICE can work even when virt-manager's embedded viewer hangs (common on Wayland).
+
+```bash
+virsh domstate win10-vm
+virsh domdisplay win10-vm          # e.g. spice://127.0.0.1:5900
+virt-viewer win10-vm               # preferred over embedded console
+# or: GDK_BACKEND=x11 virt-viewer win10-vm
+```
+
+With GPU passthrough, the **physical monitor on the discrete GPU** is the primary display, not SPICE.
+
+#### VM defined but GPU not in live XML
+
+After changing `gpu.conf`, always re-apply:
+
+```bash
+./scripts/stop-vm.sh && ./scripts/setup-vm.sh
+```
 
 ---
 
@@ -249,6 +380,10 @@ The converter writes `*.ISO` (uppercase). `finish-download.sh` uses a case-insen
 - Confirm `<interface type='user'>` in `scripts/win10-vm.xml`
 - Use `e1000e` NIC model (Windows inbox driver)
 - Restart VM: `./scripts/stop-vm.sh && ./scripts/start-vm.sh`
+
+### GPU passthrough / VFIO
+
+See [GPU passthrough troubleshooting](#gpu-passthrough-troubleshooting) above for `iommu` XML errors, hung `virsh start`, VFIO binding, and virt-manager console issues.
 
 ### Check logs
 

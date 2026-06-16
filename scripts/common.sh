@@ -88,6 +88,17 @@ insert_block_at_marker() {
     }"
 }
 
+# Guest vIOMMU in domain XML requires libvirt >= 9.4 (Ubuntu 24.04+).
+# Host IOMMU (BIOS + kernel) is still required for VFIO; this only affects the XML feature.
+libvirt_supports_guest_iommu() {
+    local ver="${1:-$(virsh --version 2>/dev/null || echo 0)}"
+    local major="${ver%%.*}"
+    local minor_patch="${ver#*.}"
+    local minor="${minor_patch%%.*}"
+
+    [ "$major" -gt 9 ] || { [ "$major" -eq 9 ] && [ "$minor" -ge 4 ]; }
+}
+
 render_domain_xml() {
     load_gpu_config
 
@@ -98,10 +109,14 @@ render_domain_xml() {
     if [ "$GPU_PASSTHROUGH" = "1" ]; then
         qxl_primary="no"
         render_gpu_hostdev_xml > "$work_dir/gpu.xml"
-        if grep -qi '^vendor_id.*AMD' /proc/cpuinfo 2>/dev/null; then
-            echo "    <iommu model='amd'/>" > "$work_dir/iommu.xml"
+        if libvirt_supports_guest_iommu; then
+            if grep -qi '^vendor_id.*AMD' /proc/cpuinfo 2>/dev/null; then
+                echo "    <iommu model='amd'/>" > "$work_dir/iommu.xml"
+            else
+                echo "    <iommu model='intel'/>" > "$work_dir/iommu.xml"
+            fi
         else
-            echo "    <iommu model='intel'/>" > "$work_dir/iommu.xml"
+            : > "$work_dir/iommu.xml"
         fi
         cat > "$work_dir/quirks.xml" <<'EOF'
     <qemu:commandline>
