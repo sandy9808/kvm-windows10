@@ -1,0 +1,21 @@
+# VM images and install media
+iso/
+disks/
+uup/UUPs/
+uup/*.iso
+uup/*.ISO
+uup/*.log
+uup/aria2*
+uup/uup-package.zip
+uup/uup_download_*
+uup/ConvertConfig.ini
+uup/CustomAppsList.txt
+uup/readme.unix.md
+
+# Logs and local state
+*.log
+convert.log
+
+# Secrets
+.env
+*.token
