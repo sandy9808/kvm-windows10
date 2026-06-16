@@ -14,7 +14,7 @@ Automated setup for a Windows 10 22H2 virtual machine on Linux using **KVM**, **
 | Windows source | UUP Dump — Windows 10 22H2 (19045.7417) Pro, en-us |
 | CPU / RAM | 4 vCPUs, 8 GB RAM |
 | Disk | 80 GB qcow2 (expandable while VM is running) |
-| Display | SPICE + QXL (use `virt-viewer`) |
+| Display | SPICE + QXL (use `virt-viewer`), or **GPU passthrough** (physical NVIDIA/AMD) |
 | Internet | User-mode NAT — works out of the box in the guest |
 | SSH | Host port `2222` → guest port `22` (after OpenSSH is enabled) |
 
@@ -71,6 +71,54 @@ virt-viewer win10-vm
 ```
 
 Complete the Windows setup wizard in the viewer. Use **SATA** disk — the VM XML is already configured for Windows inbox drivers.
+
+---
+
+## GPU passthrough (VFIO)
+
+Pass a physical NVIDIA or AMD GPU through to the Windows VM for native graphics performance (gaming, CUDA, DirectX, etc.).
+
+### Requirements
+
+- **IOMMU** enabled in BIOS (Intel VT-d or AMD-Vi)
+- Kernel cmdline: `intel_iommu=on` or `amd_iommu=on` (and often `iommu=pt`)
+- A **discrete GPU** bound to `vfio-pci` (not in use by the host desktop)
+- Dual-GPU setups work best: Intel iGPU for the Linux host, discrete GPU for the VM
+
+### Quick setup
+
+```bash
+# List candidate GPUs and IOMMU groups
+./scripts/detect-gpu.sh
+
+# Auto-detect and enable passthrough (GPU + HDMI audio)
+./scripts/setup-gpu.sh --auto
+
+# Or specify PCI slots manually (from detect-gpu.sh output)
+./scripts/setup-gpu.sh --enable 01:00.0,01:00.1
+
+# Re-apply the libvirt domain with GPU devices
+./scripts/stop-vm.sh
+./scripts/setup-vm.sh
+./scripts/start-vm.sh
+```
+
+Connect your monitor to the **passed-through GPU** — not SPICE. QXL remains available as a secondary display for remote viewing.
+
+### Disable passthrough
+
+```bash
+./scripts/setup-gpu.sh --disable
+./scripts/stop-vm.sh && ./scripts/setup-vm.sh
+```
+
+### Windows guest
+
+After Windows is installed, install the GPU vendor driver (NVIDIA GeForce Experience / AMD Adrenalin) inside the VM. The VM XML already includes NVIDIA-friendly settings (`kvm hidden`, OVMF MMIO quirk).
+
+### Configuration file
+
+`scripts/setup-gpu.sh` writes `scripts/gpu.conf` (gitignored, machine-specific). See `scripts/gpu.conf.example` for the format.
 
 ---
 
@@ -147,6 +195,9 @@ Resize-Partition -DiskNumber $part.DiskNumber -PartitionNumber $part.PartitionNu
 | `scripts/expand-disk.sh` | Grow qcow2 online |
 | `scripts/enable-openssh.ps1` | Enable OpenSSH Server in Windows |
 | `scripts/common.sh` | Shared paths and XML templating |
+| `scripts/detect-gpu.sh` | List discrete GPUs and IOMMU groups for passthrough |
+| `scripts/setup-gpu.sh` | Enable/disable VFIO GPU passthrough |
+| `scripts/gpu.conf.example` | Example GPU passthrough configuration |
 | `scripts/win10-vm.xml` | libvirt domain template (`@VM_DIR@` placeholder) |
 
 ---
@@ -236,6 +287,7 @@ Edit `scripts/win10-vm.xml` before running `setup-vm.sh`:
 
 - **RAM / CPU:** `<memory>`, `<vcpu>`
 - **SSH port:** set `SSH_HOST_PORT=2223 ./scripts/start-vm.sh`
+- **GPU passthrough:** `./scripts/setup-gpu.sh --auto` then re-run `setup-vm.sh`
 - **Initial disk size:** change `80G` in `setup-vm.sh` before first `qemu-img create`
 
 Re-apply changes:

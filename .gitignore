@@ -16,6 +16,9 @@ uup/readme.unix.md
 *.log
 convert.log
 
+# GPU passthrough (machine-specific PCI addresses)
+scripts/gpu.conf
+
 # Secrets
 .env
 *.token

@@ -1,0 +1,15 @@
+# GPU passthrough configuration for win10-vm
+# Copy to gpu.conf and edit, or run: ./scripts/setup-gpu.sh
+#
+# Enable VFIO passthrough of a physical GPU into the Windows VM.
+# Requires IOMMU (Intel VT-d / AMD-Vi) enabled in BIOS and kernel.
+
+# 1 = pass through GPU_PCI_SLOTS, 0 = use QXL + SPICE only
+GPU_PASSTHROUGH=0
+
+# Comma-separated PCI addresses (output of: ./scripts/detect-gpu.sh)
+# Include the GPU and its HDMI/DP audio function in the same IOMMU group.
+GPU_PCI_SLOTS=01:00.0,01:00.1
+
+# When 1, setup-gpu.sh picks the first discrete NVIDIA/AMD GPU automatically
+GPU_AUTO_DETECT=0

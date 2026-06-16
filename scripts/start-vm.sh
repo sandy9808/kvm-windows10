@@ -18,6 +18,13 @@ if [ "$STATE" = "running" ]; then
     exit 0
 fi
 
+# shellcheck source=common.sh
+load_gpu_config
+if [ "$GPU_PASSTHROUGH" = "1" ]; then
+    echo "GPU passthrough enabled: $GPU_PCI_SLOTS"
+    echo "Connect display to the passed-through GPU output (not SPICE)."
+fi
+
 echo "Starting $VM_NAME..."
 virsh start "$VM_NAME"
 

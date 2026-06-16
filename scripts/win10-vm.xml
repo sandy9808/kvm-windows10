@@ -15,6 +15,7 @@
   <features>
     <acpi/>
     <apic/>
+@IOMMU_FEATURE@
     <hyperv>
       <relaxed state='on'/>
       <vapic state='on'/>
@@ -67,8 +68,9 @@
     <sound model='ich9'/>
     <audio id='1' type='spice'/>
     <video>
-      <model type='qxl' ram='65536' vram='65536' vgamem='16384' heads='1' primary='yes'/>
+      <model type='qxl' ram='65536' vram='65536' vgamem='16384' heads='1' primary='@QXL_PRIMARY@'/>
     </video>
+@GPU_HOSTDEV@
     <graphics type='spice' autoport='yes' listen='127.0.0.1'>
       <listen type='address' address='127.0.0.1'/>
     </graphics>
@@ -79,5 +81,6 @@
     <rng model='virtio'>
       <backend model='random'>/dev/urandom</backend>
     </rng>
+@GPU_QUIRKS@
   </devices>
 </domain>
