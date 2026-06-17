@@ -23,6 +23,11 @@ if [ ! -f "$DISK" ]; then
     fi
 fi
 
+if [ ! -f "$DATA_DISK" ]; then
+    qemu-img create -f qcow2 "$DATA_DISK" 300G
+    echo "Created E: disk: $DATA_DISK"
+fi
+
 if [ ! -f "$ISO" ]; then
     echo "ISO not ready yet: $ISO"
     echo "Run: $SCRIPT_DIR/download-windows.sh"
@@ -56,7 +61,8 @@ echo ""
 echo "Resources allocated:"
 echo "  CPU:    4 cores (host-passthrough)"
 echo "  RAM:    8 GB"
-echo "  Disk:   $(qemu-img info "$DISK" | awk -F': ' '/virtual size/ {print $2}')"
+echo "  Disk:   C: $(qemu-img info "$DISK" | awk -F': ' '/virtual size/ {print $2}')"
+echo "  Data:   E: $(qemu-img info "$DATA_DISK" | awk -F': ' '/virtual size/ {print $2}')"
 echo "  $(gpu_status_line)"
 echo "  Sound:  ich9"
 echo "  Net:    user-mode NAT (internet) + SSH host:$SSH_HOST_PORT -> guest:22"

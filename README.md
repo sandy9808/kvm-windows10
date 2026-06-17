@@ -13,7 +13,7 @@ Automated setup for a Windows 10 22H2 virtual machine on Linux using **KVM**, **
 | Hypervisor | KVM via libvirt (`qemu:///system`) |
 | Windows source | UUP Dump — Windows 10 22H2 (19045.7417) Pro, en-us |
 | CPU / RAM | 4 vCPUs, 8 GB RAM |
-| Disk | 80 GB qcow2 (expandable while VM is running) |
+| Disk | **C:** 80 GB + **E:** 300 GB (separate qcow2 images, expandable online) |
 | Display | SPICE + QXL (use `virt-viewer`), or **GPU passthrough** (physical NVIDIA/AMD) |
 | Internet | User-mode NAT — works out of the box in the guest |
 | SSH | Host port `2222` → guest port `22` (after OpenSSH is enabled) |
@@ -282,34 +282,116 @@ Port forwarding is applied automatically by `start-vm.sh` using the QEMU monitor
 
 ---
 
-## Increase disk size (VM stays running)
+## Disk layout and management
 
-The guest disk is **qcow2 on SATA**, so you can grow it **without shutting down Windows**.
+Windows sees **two SATA disks** attached by libvirt. Each disk is a separate **qcow2** file on the Linux host. Growing a disk adds **unallocated space on the same physical disk** in Windows — you then **Extend Volume** in Disk Management (or PowerShell) to give that space to C: or E:.
 
-### On the Linux host
+### Default layout
+
+| Windows | Host file | libvirt target | Default size | Purpose |
+|---------|-----------|----------------|--------------|---------|
+| **C:** | `disks/win10-vm.qcow2` | `sdb` | 80 GB | Windows system drive |
+| **E:** | `disks/win10-vm-d.qcow2` | `sdc` | 300 GB | Data / games / projects |
+
+Configured in `scripts/win10-vm.xml` and created by `scripts/setup-vm.sh`. Paths are defined in `scripts/common.sh`:
 
 ```bash
-./scripts/expand-disk.sh +20G    # add 20 GB (default if no argument)
+DISK="$VM_DIR/disks/win10-vm.qcow2"       # C:
+DATA_DISK="$VM_DIR/disks/win10-vm-d.qcow2" # E:
 ```
 
-Or manually:
+`setup-vm.sh` only **creates** qcow2 files if they do not exist yet. Re-running it re-applies the libvirt XML; it does **not** wipe existing disks.
+
+### How host-side resizing works
+
+| Action | Tool | VM can stay running? |
+|--------|------|----------------------|
+| Grow **C:** | `./scripts/expand-disk.sh +SIZE` or `virsh blockresize win10-vm sdb SIZE` | Yes |
+| Grow **E:** | `virsh blockresize win10-vm sdc SIZE` | Yes |
+| Shrink a disk | `sudo qemu-img resize --shrink DISK SIZE` | **No** — stop VM first |
+| Add/remove a whole disk | Edit `win10-vm.xml` → `./scripts/stop-vm.sh` → `./scripts/setup-vm.sh` → `./scripts/start-vm.sh` | **No** — SATA does not hot-plug |
+
+**Grow example — extend E: from 300 GB to 400 GB:**
 
 ```bash
-qemu-img resize disks/win10-vm.qcow2 +20G
-qemu-img info disks/win10-vm.qcow2
+# On the host (VM may stay running)
+virsh blockresize win10-vm sdc 400G
+virsh domblkinfo win10-vm sdc    # confirm new Capacity
 ```
 
-### Inside Windows (no reboot needed)
+Then inside Windows (Administrator PowerShell):
 
-**GUI:** `Win + R` → `diskmgmt.msc` → **Action → Rescan Disks** → right-click **C:** → **Extend Volume**.
+```powershell
+Update-HostStorageCache
+$e = Get-Partition -DriveLetter E
+$size = Get-PartitionSupportedSize -DiskNumber $e.DiskNumber -PartitionNumber $e.PartitionNumber
+Resize-Partition -DiskNumber $e.DiskNumber -PartitionNumber $e.PartitionNumber -Size $size.SizeMax
+```
 
-**PowerShell (Administrator):**
+Or run `scripts/extend-e-drive.ps1` (copy into the guest or mount the repo share).
+
+**Grow C: by 20 GB:**
+
+```bash
+./scripts/expand-disk.sh +20G
+# or: virsh blockresize win10-vm sdb +20G
+```
+
+Then extend **C:** in Windows the same way (replace `E` with `C` in the PowerShell above).
+
+**Shrink C: back to 80 GB** (when you expanded the virtual disk but only want 80 GB for Windows):
+
+```bash
+./scripts/stop-vm.sh
+sudo qemu-img resize --shrink disks/win10-vm.qcow2 80G
+./scripts/setup-vm.sh && ./scripts/start-vm.sh
+```
+
+Reboot or **Rescan Disks** in Windows so Disk 0 shows the smaller size.
+
+### Inside Windows — extend a volume
+
+**GUI:** `Win + R` → `diskmgmt.msc` → **Action → Rescan Disks** → right-click the volume → **Extend Volume** → use adjacent unallocated space.
+
+**PowerShell (Administrator) — C:**
 
 ```powershell
 Update-HostStorageCache
 $part = Get-Partition -DriveLetter C
 $size = Get-PartitionSupportedSize -DiskNumber $part.DiskNumber -PartitionNumber $part.PartitionNumber
 Resize-Partition -DiskNumber $part.DiskNumber -PartitionNumber $part.PartitionNumber -Size $size.SizeMax
+```
+
+**First-time setup — format E: on a new blank disk:**
+
+```powershell
+# scripts/format-d-drive.ps1 — adjust size filter if your E: disk is not 200 GB
+$disk = Get-Disk | Where-Object { $_.PartitionStyle -eq 'RAW' -and $_.Size -ge 180GB } | Select-Object -First 1
+Initialize-Disk -Number $disk.Number -PartitionStyle GPT -Confirm:$false
+$part = New-Partition -DiskNumber $disk.Number -UseMaximumSize -DriveLetter E
+Format-Volume -Partition $part -FileSystem NTFS -NewFileSystemLabel "Data" -Confirm:$false
+```
+
+### Why "Extend Volume" is sometimes greyed out
+
+- **Recovery partition** sits between **C:** and unallocated space → Windows cannot extend C: across it. Use a **separate virtual disk** for E: instead of one huge C: disk.
+- **Unallocated space is on a different physical disk** than the volume → Extend only works on the **same** disk, immediately after the partition. To grow E:, resize `win10-vm-d.qcow2` (sdc), not a second disk.
+- **Stale disk size in Windows** after a host shrink → reboot the VM or **Action → Rescan Disks**.
+
+### Recommended pattern
+
+1. Keep **C:** small (80 GB) — Windows + apps only.
+2. Put bulk storage on **E:** (`win10-vm-d.qcow2`) — grow with `virsh blockresize` + Extend Volume in Windows.
+3. Do **not** grow C: to 200 GB if you only need a larger data drive — add/resize the E: disk instead.
+
+### Verify disks from the host
+
+```bash
+virsh domblklist win10-vm
+virsh domblkinfo win10-vm sdb    # C:
+virsh domblkinfo win10-vm sdc    # E:
+qemu-img info disks/win10-vm.qcow2
+qemu-img info disks/win10-vm-d.qcow2
 ```
 
 ---
@@ -323,7 +405,9 @@ Resize-Partition -DiskNumber $part.DiskNumber -PartitionNumber $part.PartitionNu
 | `scripts/setup-vm.sh` | Create disk, render XML, `virsh define win10-vm` |
 | `scripts/start-vm.sh` | Start VM + SSH port forward |
 | `scripts/stop-vm.sh` | Graceful shutdown (120 s timeout) |
-| `scripts/expand-disk.sh` | Grow qcow2 online |
+| `scripts/expand-disk.sh` | Grow **C:** qcow2 online (`+SIZE`) |
+| `scripts/extend-e-drive.ps1` | Extend **E:** into unallocated space (run in Windows) |
+| `scripts/format-d-drive.ps1` | Initialize a blank second disk as a data volume (run in Windows) |
 | `scripts/enable-openssh.ps1` | Enable OpenSSH Server in Windows |
 | `scripts/common.sh` | Shared paths and XML templating |
 | `scripts/detect-gpu.sh` | List discrete GPUs and IOMMU groups for passthrough |
@@ -410,7 +494,7 @@ sudo tail -f /var/log/libvirt/qemu/win10-vm.log
 │   ├── expand-disk.sh
 │   └── enable-openssh.ps1
 ├── iso/                 # win10-22h2.iso (not in git)
-├── disks/               # win10-vm.qcow2, OVMF_VARS.fd (not in git)
+├── disks/               # win10-vm.qcow2 (C:), win10-vm-d.qcow2 (E:), OVMF_VARS.fd (not in git)
 └── uup/                 # UUP download cache (not in git)
 ```
 

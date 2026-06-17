@@ -48,6 +48,11 @@
       <source file='@VM_DIR@/disks/win10-vm.qcow2'/>
       <target dev='sdb' bus='sata'/>
     </disk>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2' discard='unmap'/>
+      <source file='@VM_DIR@/disks/win10-vm-d.qcow2'/>
+      <target dev='sdc' bus='sata'/>
+    </disk>
     <disk type='file' device='cdrom'>
       <driver name='qemu' type='raw'/>
       <source file='@VM_DIR@/iso/win10-22h2.iso'/>

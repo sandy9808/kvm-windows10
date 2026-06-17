@@ -4,6 +4,7 @@ VM_NAME="win10-vm"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VM_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 DISK="$VM_DIR/disks/win10-vm.qcow2"
+DATA_DISK="$VM_DIR/disks/win10-vm-d.qcow2"   # E: drive in Windows (300G)
 ISO="$VM_DIR/iso/win10-22h2.iso"
 XML_TEMPLATE="$SCRIPT_DIR/win10-vm.xml"
 OVMF_VARS="$VM_DIR/disks/OVMF_VARS.fd"
