@@ -231,6 +231,9 @@ if ($failed -gt 0) {
     $results | Where-Object { -not $_.Passed } | ForEach-Object {
         Write-Host "  - $($_.Name): $($_.Detail)" -ForegroundColor Red
     }
+    Write-Host ""
+    Write-Host "Auto-fix (run as Administrator):" -ForegroundColor Cyan
+    Write-Host "  powershell -ExecutionPolicy Bypass -File .\fix-vm.ps1"
 }
 
 Write-Host ""
@@ -239,5 +242,5 @@ if ($failed -eq 0) {
     exit 0
 }
 
-Write-Host "Some checks failed. Review the output above." -ForegroundColor Yellow
+Write-Host "Some checks failed. Run fix-vm.ps1 or review the output above." -ForegroundColor Yellow
 exit 1
