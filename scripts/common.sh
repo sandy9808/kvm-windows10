@@ -150,3 +150,42 @@ gpu_status_line() {
         echo "GPU:    QXL + SPICE (run ./scripts/setup-gpu.sh to enable passthrough)"
     fi
 }
+
+# Return 0 if no other QEMU/libvirt guest holds the configured VFIO devices.
+check_vfio_gpu_available() {
+    local slot host_addr qemu_line vm_name
+    local -a slots=()
+    local IFS=','
+
+    read -ra slots <<< "$GPU_PCI_SLOTS"
+
+    for slot in "${slots[@]}"; do
+        slot="${slot//[[:space:]]/}"
+        [ -n "$slot" ] || continue
+
+        if [[ "$slot" =~ ^([0-9a-fA-F]{2}):([0-9a-fA-F]{2})\.([0-7])$ ]]; then
+            host_addr="0000:${slot}"
+        elif [[ "$slot" =~ ^([0-9a-fA-F]{4}):([0-9a-fA-F]{2}):([0-9a-fA-F]{2})\.([0-7])$ ]]; then
+            host_addr="${BASH_REMATCH[1]}:${BASH_REMATCH[2]}:${BASH_REMATCH[3]}.${BASH_REMATCH[4]}"
+        else
+            echo "Invalid PCI slot in gpu.conf: $slot" >&2
+            return 1
+        fi
+
+        # QEMU may pass VFIO as host=ADDR (HMP) or "host":"ADDR" (JSON -device).
+        qemu_line=$(ps -eo args= 2>/dev/null | grep -F "vfio-pci" | grep -F "$host_addr" | grep -v grep | head -1 || true)
+        if [ -n "$qemu_line" ]; then
+            vm_name=$(echo "$qemu_line" | sed -n 's/.*-name guest=\([^,]*\).*/\1/p')
+            [ -n "$vm_name" ] || vm_name="(unknown)"
+            echo "ERROR: VFIO device $host_addr is already in use by VM '$vm_name'." >&2
+            echo "Only one VM can use the GPU at a time. Stop the other VM first, then retry." >&2
+            if [ "$vm_name" != "$VM_NAME" ]; then
+                echo "  virsh shutdown $vm_name   # or: virsh destroy $vm_name" >&2
+                echo "  # Docker/Vagrant in another namespace: sudo docker ps && sudo docker stop <container>" >&2
+            fi
+            return 1
+        fi
+    done
+
+    return 0
+}

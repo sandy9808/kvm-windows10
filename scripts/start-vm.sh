@@ -23,6 +23,7 @@ load_gpu_config
 if [ "$GPU_PASSTHROUGH" = "1" ]; then
     echo "GPU passthrough enabled: $GPU_PCI_SLOTS"
     echo "Connect display to the passed-through GPU output (not SPICE)."
+    check_vfio_gpu_available
 fi
 
 echo "Starting $VM_NAME..."
